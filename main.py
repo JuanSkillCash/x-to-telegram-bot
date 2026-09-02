@@ -3,7 +3,7 @@ Vigila los retweets de una cuenta de X (Twitter) y los reenvía a un
 tema (topic) específico de un grupo de Telegram.
 
 Envía solo el texto de la noticia (sin links de artículos externos) y,
-si el tweet tiene foto(s), las adjunta como imagen real.
+si el tweet original tiene foto(s) o video, adjunta la imagen.
 
 Variables de entorno necesarias (se configuran como "Secrets" en GitHub Actions):
     X_BEARER_TOKEN        -> Bearer Token de tu app en developer.x.com
@@ -30,10 +30,12 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TELEGRAM_THREAD_ID = os.environ.get("TELEGRAM_THREAD_ID")  # opcional
 
-X_API_URL = f"https://api.x.com/2/users/{X_USER_ID}/tweets"
+X_TIMELINE_URL = f"https://api.x.com/2/users/{X_USER_ID}/tweets"
+X_TWEETS_LOOKUP_URL = "https://api.x.com/2/tweets"
 TELEGRAM_BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 URL_RE = re.compile(r"https?://t\.co/\S+")
+X_HEADERS = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
 
 
 def load_state():
@@ -48,79 +50,76 @@ def save_state(state):
         json.dump(state, f)
 
 
-def fetch_new_tweets(since_id):
+def fetch_timeline(since_id):
+    """Trae los tweets/retweets recientes del usuario vigilado."""
     params = {
         "exclude": "replies",
         "max_results": 20,
-        "tweet.fields": "created_at,referenced_tweets,attachments",
-        "expansions": "referenced_tweets.id,referenced_tweets.id.author_id,attachments.media_keys",
-        "user.fields": "username",
-        "media.fields": "url,preview_image_url,type",
+        "tweet.fields": "created_at,referenced_tweets",
     }
     if since_id:
         params["since_id"] = since_id
 
-    headers = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
-    resp = requests.get(X_API_URL, headers=headers, params=params, timeout=30)
-
+    resp = requests.get(X_TIMELINE_URL, headers=X_HEADERS, params=params, timeout=30)
     if resp.status_code != 200:
-        print(f"Error consultando la API de X: {resp.status_code} {resp.text}")
+        print(f"Error consultando el timeline: {resp.status_code} {resp.text}")
         sys.exit(1)
-
     return resp.json()
 
 
-def clean_text(text):
-    """Quita los links t.co (artículos externos, etc.) del texto del tweet."""
-    text = URL_RE.sub("", text).strip()
-    return text
+def fetch_originals(tweet_ids):
+    """Trae texto + media de los tweets originales (los que fueron retuiteados)."""
+    if not tweet_ids:
+        return {}
+
+    params = {
+        "ids": ",".join(tweet_ids),
+        "tweet.fields": "text,attachments",
+        "expansions": "attachments.media_keys",
+        "media.fields": "url,preview_image_url,type",
+    }
+    resp = requests.get(X_TWEETS_LOOKUP_URL, headers=X_HEADERS, params=params, timeout=30)
+    if resp.status_code != 200:
+        print(f"Error consultando tweets originales: {resp.status_code} {resp.text}")
+        return {}
+
+    payload = resp.json()
+    tweets = {t["id"]: t for t in payload.get("data", [])}
+    media_by_key = {m["media_key"]: m for m in payload.get("includes", {}).get("media", [])}
+
+    result = {}
+    for tid, tweet in tweets.items():
+        text = URL_RE.sub("", tweet.get("text", "")).strip()
+
+        photos = []
+        for key in tweet.get("attachments", {}).get("media_keys", []):
+            media = media_by_key.get(key)
+            if not media:
+                continue
+            if media.get("type") == "photo" and media.get("url"):
+                photos.append(media["url"])
+            elif media.get("preview_image_url"):
+                photos.append(media["preview_image_url"])
+
+        result[tid] = {"text": text, "photos": photos}
+
+    return result
 
 
-def extract_retweets(data):
-    """Devuelve una lista de dicts {tweet_id, text, photos} listos para enviar."""
-    tweets = data.get("data", [])
+def extract_retweets(timeline_data):
+    """Devuelve [{tweet_id, original_id}] en orden cronológico + el newest_id."""
+    tweets = timeline_data.get("data", [])
+    newest_id = timeline_data.get("meta", {}).get("newest_id")
     if not tweets:
-        return [], data.get("meta", {}).get("newest_id")
-
-    included_tweets = {t["id"]: t for t in data.get("includes", {}).get("tweets", [])}
-    included_media = {m["media_key"]: m for m in data.get("includes", {}).get("media", [])}
+        return [], newest_id
 
     retweets = []
     for tweet in tweets:
-        refs = tweet.get("referenced_tweets", [])
-        for ref in refs:
-            if ref["type"] != "retweeted":
-                continue
-            original = included_tweets.get(ref["id"])
-            if not original:
-                continue
+        for ref in tweet.get("referenced_tweets", []):
+            if ref["type"] == "retweeted":
+                retweets.append({"tweet_id": tweet["id"], "original_id": ref["id"]})
 
-            text = clean_text(original.get("text", ""))
-
-            photos = []
-            media_keys = original.get("attachments", {}).get("media_keys", [])
-            for key in media_keys:
-                media = included_media.get(key)
-                if not media:
-                    continue
-                if media.get("type") == "photo" and media.get("url"):
-                    photos.append(media["url"])
-                elif media.get("preview_image_url"):
-                    # video/gif: usamos la miniatura como imagen
-                    photos.append(media["preview_image_url"])
-
-            retweets.append(
-                {
-                    "tweet_id": tweet["id"],
-                    "text": text,
-                    "photos": photos,
-                }
-            )
-
-    # Orden cronológico: la API devuelve lo más nuevo primero, lo invertimos
-    retweets.reverse()
-
-    newest_id = data.get("meta", {}).get("newest_id")
+    retweets.reverse()  # la API devuelve lo más nuevo primero
     return retweets, newest_id
 
 
@@ -175,10 +174,8 @@ def send_media_group(photo_urls, caption):
         print(f"Error enviando álbum a Telegram: {resp.status_code} {resp.text}")
 
 
-def send_retweet(rt):
-    text = rt["text"] if rt["text"] else "📰"
-    photos = rt["photos"]
-
+def send_retweet(text, photos):
+    text = text if text else "📰"
     if not photos:
         send_text(text)
     elif len(photos) == 1:
@@ -189,14 +186,21 @@ def send_retweet(rt):
 
 def main():
     state = load_state()
-    data = fetch_new_tweets(state.get("since_id"))
-    retweets, newest_id = extract_retweets(data)
+    timeline_data = fetch_timeline(state.get("since_id"))
+    retweets, newest_id = extract_retweets(timeline_data)
 
     print(f"Retweets nuevos encontrados: {len(retweets)}")
 
-    for rt in retweets:
-        send_retweet(rt)
-        time.sleep(1)  # pequeño respiro entre mensajes
+    if retweets:
+        original_ids = list({rt["original_id"] for rt in retweets})
+        originals = fetch_originals(original_ids)
+
+        for rt in retweets:
+            info = originals.get(rt["original_id"])
+            if not info:
+                continue
+            send_retweet(info["text"], info["photos"])
+            time.sleep(1)  # pequeño respiro entre mensajes
 
     if newest_id:
         state["since_id"] = newest_id
