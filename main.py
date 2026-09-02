@@ -21,6 +21,7 @@ import sys
 import json
 import time
 import requests
+from deep_translator import GoogleTranslator
 
 STATE_FILE = "state.json"
 
@@ -90,6 +91,7 @@ def fetch_originals(tweet_ids):
     result = {}
     for tid, tweet in tweets.items():
         text = URL_RE.sub("", tweet.get("text", "")).strip()
+        text = translate_to_spanish(text)
 
         photos = []
         for key in tweet.get("attachments", {}).get("media_keys", []):
@@ -104,6 +106,16 @@ def fetch_originals(tweet_ids):
         result[tid] = {"text": text, "photos": photos}
 
     return result
+
+
+def translate_to_spanish(text):
+    if not text:
+        return text
+    try:
+        return GoogleTranslator(source="auto", target="es").translate(text)
+    except Exception as e:
+        print(f"No se pudo traducir, se manda en el idioma original: {e}")
+        return text
 
 
 def extract_retweets(timeline_data):
