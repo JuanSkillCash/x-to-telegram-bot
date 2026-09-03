@@ -108,14 +108,45 @@ def fetch_originals(tweet_ids):
     return result
 
 
-def translate_to_spanish(text):
+BROKEN_TRANSLATION_MARKERS = [
+    "error 500",
+    "server error",
+    "please try again later",
+    "that's an error",
+    "that's all we know",
+    "bad request",
+    "service unavailable",
+]
+
+
+def looks_broken(original, translated):
+    """Detecta si Google Translate devolvió una página de error en vez de traducir."""
+    if not translated:
+        return True
+    lowered = translated.lower()
+    if any(marker in lowered for marker in BROKEN_TRANSLATION_MARKERS):
+        return True
+    # Si la traducción quedó absurdamente más corta o larga que el original, sospechamos.
+    if len(original) > 20 and len(translated) < len(original) * 0.2:
+        return True
+    return False
+
+
+def translate_to_spanish(text, attempts=2):
     if not text:
         return text
-    try:
-        return GoogleTranslator(source="auto", target="es").translate(text)
-    except Exception as e:
-        print(f"No se pudo traducir, se manda en el idioma original: {e}")
-        return text
+    for attempt in range(attempts):
+        try:
+            translated = GoogleTranslator(source="auto", target="es").translate(text)
+            if not looks_broken(text, translated):
+                return translated
+            print(f"Traducción sospechosa en el intento {attempt + 1}, reintentando...")
+        except Exception as e:
+            print(f"No se pudo traducir (intento {attempt + 1}): {e}")
+        time.sleep(2)
+
+    print("No se logró traducir de forma confiable, se manda en el idioma original.")
+    return text
 
 
 def extract_retweets(timeline_data):
