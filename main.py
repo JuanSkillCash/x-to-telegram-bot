@@ -75,7 +75,7 @@ def fetch_originals(tweet_ids):
 
     params = {
         "ids": ",".join(tweet_ids),
-        "tweet.fields": "text,attachments",
+        "tweet.fields": "text,attachments,note_tweet",
         "expansions": "attachments.media_keys",
         "media.fields": "url,preview_image_url,type",
     }
@@ -90,7 +90,10 @@ def fetch_originals(tweet_ids):
 
     result = {}
     for tid, tweet in tweets.items():
-        text = URL_RE.sub("", tweet.get("text", "")).strip()
+        # Si el tweet es "largo" (formato extendido de X), el texto completo
+        # viene en note_tweet.text; el campo "text" normal viene recortado.
+        full_text = tweet.get("note_tweet", {}).get("text") or tweet.get("text", "")
+        text = URL_RE.sub("", full_text).strip()
         text = translate_to_spanish(text)
 
         photos = []
@@ -217,14 +220,29 @@ def send_media_group(photo_urls, caption):
         print(f"Error enviando álbum a Telegram: {resp.status_code} {resp.text}")
 
 
+TELEGRAM_CAPTION_LIMIT = 1024
+
+
 def send_retweet(text, photos):
     text = text if text else "📰"
+
     if not photos:
         send_text(text)
-    elif len(photos) == 1:
-        send_single_photo(photos[0], text)
+        return
+
+    # Si el texto no cabe como "caption" de una foto, se manda la foto
+    # (sin texto) y el texto completo en un mensaje aparte, justo después.
+    if len(text) > TELEGRAM_CAPTION_LIMIT:
+        if len(photos) == 1:
+            send_single_photo(photos[0], "")
+        else:
+            send_media_group(photos, "")
+        send_text(text)
     else:
-        send_media_group(photos, text)
+        if len(photos) == 1:
+            send_single_photo(photos[0], text)
+        else:
+            send_media_group(photos, text)
 
 
 def main():
