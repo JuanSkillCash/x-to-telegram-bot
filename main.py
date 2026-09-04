@@ -135,21 +135,53 @@ def looks_broken(original, translated):
     return False
 
 
+def split_into_chunks(text, max_len=450):
+    """Parte el texto en trozos manejables (por oración) para traducir sin fallos."""
+    if len(text) <= max_len:
+        return [text]
+
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        if len(current) + len(sentence) + 1 <= max_len:
+            current = f"{current} {sentence}".strip()
+        else:
+            if current:
+                chunks.append(current)
+            # Si una sola "oración" ya es más larga que max_len, la partimos a la fuerza.
+            while len(sentence) > max_len:
+                chunks.append(sentence[:max_len])
+                sentence = sentence[max_len:]
+            current = sentence
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def translate_to_spanish(text, attempts=2):
     if not text:
         return text
-    for attempt in range(attempts):
-        try:
-            translated = GoogleTranslator(source="auto", target="es").translate(text)
-            if not looks_broken(text, translated):
-                return translated
-            print(f"Traducción sospechosa en el intento {attempt + 1}, reintentando...")
-        except Exception as e:
-            print(f"No se pudo traducir (intento {attempt + 1}): {e}")
-        time.sleep(2)
 
-    print("No se logró traducir de forma confiable, se manda en el idioma original.")
-    return text
+    chunks = split_into_chunks(text)
+    translated_chunks = []
+
+    for chunk in chunks:
+        translated = None
+        for attempt in range(attempts):
+            try:
+                candidate = GoogleTranslator(source="auto", target="es").translate(chunk)
+                if not looks_broken(chunk, candidate):
+                    translated = candidate
+                    break
+                print(f"Traducción sospechosa en el intento {attempt + 1}, reintentando...")
+            except Exception as e:
+                print(f"No se pudo traducir un fragmento (intento {attempt + 1}): {e}")
+            time.sleep(2)
+
+        translated_chunks.append(translated if translated else chunk)
+
+    return " ".join(translated_chunks)
 
 
 def extract_retweets(timeline_data):
