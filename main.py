@@ -95,6 +95,7 @@ def fetch_originals(tweet_ids):
         full_text = tweet.get("note_tweet", {}).get("text") or tweet.get("text", "")
         text = URL_RE.sub("", full_text).strip()
         text = translate_to_spanish(text)
+        time.sleep(1.5)  # pausa entre traducciones para no saturar a Google Translate
 
         photos = []
         for key in tweet.get("attachments", {}).get("media_keys", []):
@@ -180,6 +181,7 @@ def translate_to_spanish(text, attempts=2):
             time.sleep(2)
 
         translated_chunks.append(translated if translated else chunk)
+        time.sleep(0.7)  # pausa breve entre fragmentos del mismo texto
 
     return " ".join(translated_chunks)
 
