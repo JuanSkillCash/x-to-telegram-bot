@@ -21,7 +21,7 @@ import sys
 import json
 import time
 import requests
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 STATE_FILE = "state.json"
 
@@ -160,7 +160,18 @@ def split_into_chunks(text, max_len=450):
     return chunks
 
 
-def translate_to_spanish(text, attempts=2):
+def try_google(chunk):
+    return GoogleTranslator(source="auto", target="es").translate(chunk)
+
+
+def try_mymemory(chunk):
+    return MyMemoryTranslator(source="auto", target="es").translate(chunk)
+
+
+TRANSLATOR_ENGINES = [try_google, try_mymemory]
+
+
+def translate_to_spanish(text, attempts=4):
     if not text:
         return text
 
@@ -170,15 +181,21 @@ def translate_to_spanish(text, attempts=2):
     for chunk in chunks:
         translated = None
         for attempt in range(attempts):
-            try:
-                candidate = GoogleTranslator(source="auto", target="es").translate(chunk)
-                if not looks_broken(chunk, candidate):
-                    translated = candidate
-                    break
-                print(f"Traducción sospechosa en el intento {attempt + 1}, reintentando...")
-            except Exception as e:
-                print(f"No se pudo traducir un fragmento (intento {attempt + 1}): {e}")
-            time.sleep(2)
+            for engine in TRANSLATOR_ENGINES:
+                try:
+                    candidate = engine(chunk)
+                    if not looks_broken(chunk, candidate):
+                        translated = candidate
+                        break
+                    print(f"Traducción sospechosa con {engine.__name__}, probando otro motor...")
+                except Exception as e:
+                    print(f"Fallo con {engine.__name__} (intento {attempt + 1}): {e}")
+            if translated:
+                break
+            # Espera cada vez más larga entre reintentos: 3s, 6s, 12s, 24s, 48s...
+            wait = min(3 * (2 ** attempt), 60)
+            print(f"Reintentando traducción en {wait}s...")
+            time.sleep(wait)
 
         translated_chunks.append(translated if translated else chunk)
         time.sleep(0.7)  # pausa breve entre fragmentos del mismo texto
