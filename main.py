@@ -22,6 +22,9 @@ import json
 import time
 import requests
 from deep_translator import GoogleTranslator, MyMemoryTranslator
+from langdetect import detect, DetectorFactory, LangDetectException
+
+DetectorFactory.seed = 0  # resultados consistentes entre corridas
 
 STATE_FILE = "state.json"
 
@@ -165,14 +168,23 @@ def split_into_chunks(text, max_len=450):
     return chunks
 
 
-def try_google(chunk):
+def detect_source_lang(text, default="en"):
+    """Detecta el idioma del texto para dárselo a MyMemory (que no soporta 'auto')."""
+    try:
+        code = detect(text)
+        return code if code else default
+    except LangDetectException:
+        return default
+
+
+def try_google(chunk, source_lang):
     return GoogleTranslator(source="auto", target="es").translate(chunk)
 
 
-def try_mymemory(chunk):
+def try_mymemory(chunk, source_lang):
     # MyMemory no soporta "auto" como idioma de origen (a diferencia de Google);
-    # como las cuentas que monitoreamos tuitean en inglés, lo fijamos directo.
-    return MyMemoryTranslator(source="en", target="es-ES").translate(chunk)
+    # por eso le pasamos el idioma ya detectado del texto completo.
+    return MyMemoryTranslator(source=source_lang, target="es-ES").translate(chunk)
 
 
 TRANSLATOR_ENGINES = [try_google, try_mymemory]
@@ -182,6 +194,7 @@ def translate_to_spanish(text, attempts=4):
     if not text:
         return text
 
+    source_lang = detect_source_lang(text)
     chunks = split_into_chunks(text)
     translated_chunks = []
 
@@ -190,7 +203,7 @@ def translate_to_spanish(text, attempts=4):
         for attempt in range(attempts):
             for engine in TRANSLATOR_ENGINES:
                 try:
-                    candidate = engine(chunk)
+                    candidate = engine(chunk, source_lang)
                     if not looks_broken(chunk, candidate):
                         translated = candidate
                         break
