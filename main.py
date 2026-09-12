@@ -120,6 +120,11 @@ BROKEN_TRANSLATION_MARKERS = [
     "that's all we know",
     "bad request",
     "service unavailable",
+    "invalid source language",
+    "invalid target language",
+    "is an invalid",
+    "using 2 letter iso",
+    "no support for the provided language",
 ]
 
 
@@ -165,7 +170,9 @@ def try_google(chunk):
 
 
 def try_mymemory(chunk):
-    return MyMemoryTranslator(source="auto", target="es-ES").translate(chunk)
+    # MyMemory no soporta "auto" como idioma de origen (a diferencia de Google);
+    # como las cuentas que monitoreamos tuitean en inglés, lo fijamos directo.
+    return MyMemoryTranslator(source="en", target="es-ES").translate(chunk)
 
 
 TRANSLATOR_ENGINES = [try_google, try_mymemory]
