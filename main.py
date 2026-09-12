@@ -169,7 +169,7 @@ def split_into_chunks(text, max_len=450):
 
 
 def detect_source_lang(text, default="en"):
-    """Detecta el idioma del texto para dárselo a MyMemory (que no soporta 'auto')."""
+    """Detecta el idioma del texto (código ISO de 2 letras, ej: 'en', 'es', 'fr')."""
     try:
         code = detect(text)
         return code if code else default
@@ -177,14 +177,31 @@ def detect_source_lang(text, default="en"):
         return default
 
 
+# MyMemory exige códigos con variante regional (ej: "en-GB", no "en" a secas).
+# Este mapa convierte el código de 2 letras que da langdetect al formato válido.
+MYMEMORY_LANG_MAP = {
+    "en": "en-GB", "es": "es-ES", "fr": "fr-FR", "pt": "pt-PT", "de": "de-DE",
+    "it": "it-IT", "nl": "nl-NL", "ru": "ru-RU", "ja": "ja-JP", "ko": "ko-KR",
+    "zh-cn": "zh-CN", "zh-tw": "zh-TW", "ar": "ar-SA", "hi": "hi-IN", "tr": "tr-TR",
+    "pl": "pl-PL", "sv": "sv-SE", "da": "da-DK", "fi": "fi-FI", "no": "nb-NO",
+    "el": "el-GR", "he": "he-IL", "id": "id-ID", "vi": "vi-VN", "th": "th-TH",
+    "uk": "uk-UA", "cs": "cs-CZ", "ro": "ro-RO", "hu": "hu-HU", "bg": "bg-BG",
+}
+
+
+def to_mymemory_lang(code, default="en-GB"):
+    return MYMEMORY_LANG_MAP.get(code.lower(), default)
+
+
 def try_google(chunk, source_lang):
     return GoogleTranslator(source="auto", target="es").translate(chunk)
 
 
 def try_mymemory(chunk, source_lang):
-    # MyMemory no soporta "auto" como idioma de origen (a diferencia de Google);
-    # por eso le pasamos el idioma ya detectado del texto completo.
-    return MyMemoryTranslator(source=source_lang, target="es-ES").translate(chunk)
+    # MyMemory no soporta "auto" ni códigos "pelados" como "en";
+    # necesita el formato con variante regional, ej: "en-GB".
+    mm_source = to_mymemory_lang(source_lang)
+    return MyMemoryTranslator(source=mm_source, target="es-ES").translate(chunk)
 
 
 TRANSLATOR_ENGINES = [try_google, try_mymemory]
