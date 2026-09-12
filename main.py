@@ -165,7 +165,7 @@ def try_google(chunk):
 
 
 def try_mymemory(chunk):
-    return MyMemoryTranslator(source="auto", target="es").translate(chunk)
+    return MyMemoryTranslator(source="auto", target="es-ES").translate(chunk)
 
 
 TRANSLATOR_ENGINES = [try_google, try_mymemory]
