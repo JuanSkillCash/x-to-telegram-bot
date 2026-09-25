@@ -21,7 +21,7 @@ import sys
 import json
 import time
 import requests
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator, MicrosoftTranslator
 from langdetect import detect, DetectorFactory, LangDetectException
 
 DetectorFactory.seed = 0  # resultados consistentes entre corridas
@@ -33,6 +33,8 @@ X_USER_ID = os.environ["X_USER_ID"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TELEGRAM_THREAD_ID = os.environ.get("TELEGRAM_THREAD_ID")  # opcional
+MS_TRANSLATOR_KEY = os.environ.get("MS_TRANSLATOR_KEY")  # opcional, motor principal si está
+MS_TRANSLATOR_REGION = os.environ.get("MS_TRANSLATOR_REGION")  # opcional
 
 X_TIMELINE_URL = f"https://api.x.com/2/users/{X_USER_ID}/tweets"
 X_TWEETS_LOOKUP_URL = "https://api.x.com/2/tweets"
@@ -98,7 +100,7 @@ def fetch_originals(tweet_ids):
         full_text = tweet.get("note_tweet", {}).get("text") or tweet.get("text", "")
         text = URL_RE.sub("", full_text).strip()
         text = translate_to_spanish(text)
-        time.sleep(1.5)  # pausa entre traducciones para no saturar a Google Translate
+        time.sleep(2.5)  # pausa entre traducciones para no saturar a Google/MyMemory
 
         photos = []
         for key in tweet.get("attachments", {}).get("media_keys", []):
@@ -193,6 +195,14 @@ def to_mymemory_lang(code, default="en-GB"):
     return MYMEMORY_LANG_MAP.get(code.lower(), default)
 
 
+def try_microsoft(chunk, source_lang):
+    # Motor principal: API oficial con clave, no sufre bloqueos de "demasiadas peticiones"
+    # como los servicios gratuitos no oficiales.
+    return MicrosoftTranslator(
+        source="auto", target="es", api_key=MS_TRANSLATOR_KEY, region=MS_TRANSLATOR_REGION
+    ).translate(chunk)
+
+
 def try_google(chunk, source_lang):
     return GoogleTranslator(source="auto", target="es").translate(chunk)
 
@@ -204,10 +214,14 @@ def try_mymemory(chunk, source_lang):
     return MyMemoryTranslator(source=mm_source, target="es-ES").translate(chunk)
 
 
+# Si hay clave de Microsoft configurada, va primero (más confiable);
+# Google y MyMemory quedan como respaldo gratuito por si Microsoft fallara.
 TRANSLATOR_ENGINES = [try_google, try_mymemory]
+if MS_TRANSLATOR_KEY:
+    TRANSLATOR_ENGINES = [try_microsoft] + TRANSLATOR_ENGINES
 
 
-def translate_to_spanish(text, attempts=4):
+def translate_to_spanish(text, attempts=5):
     if not text:
         return text
 
@@ -230,7 +244,7 @@ def translate_to_spanish(text, attempts=4):
             if translated:
                 break
             # Espera cada vez más larga entre reintentos: 3s, 6s, 12s, 24s, 48s...
-            wait = min(3 * (2 ** attempt), 60)
+            wait = min(8 * (2 ** attempt), 90)
             print(f"Reintentando traducción en {wait}s...")
             time.sleep(wait)
 
